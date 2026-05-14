@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Side-Scrolling Action Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            border: 2px solid #fff;
+            background-color: #000;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<!-- ゲーム描画領域 -->
+<canvas id="gameCanvas" width="800" height="450"></canvas>
+
+<!-- 画像素材の読み込み（プレースホルダー） -->
+<!-- 実際の画像がある場合は src="images/chara1.png" のように書き換えてください -->
+<div class="hidden">
+    <!-- メニュー背景 -->
+    <img id="img_menu_bg" src="images/menu_bg.png" alt="Menu BG">
+    <!-- ゲーム背景 -->
+    <img id="img_game_bg" src="images/game_bg.png" alt="Game BG">
+    
+    <!-- 武器画像 -->
+    <img id="img_weapon_strong" src="images/weapon_strong.png" alt="Weapon Strong">
+    <img id="img_weapon_normal" src="images/weapon_normal.png" alt="Weapon Normal">
+    <img id="img_weapon_weak" src="images/weapon_weak.png" alt="Weapon Weak">
+
+    <!-- キャラクター画像 (1-8) -->
+    <img id="img_char_1" src="images/char1.png" alt="Walk 1">
+    <img id="img_char_2" src="images/char2.png" alt="Walk 2">
+    <img id="img_char_3" src="images/char3.png" alt="Stand 3">
+    <img id="img_char_4" src="images/char4.png" alt="Walk 4">
+    <img id="img_char_5" src="images/char5.png" alt="Walk 5">
+    <img id="img_char_6" src="images/char6.png" alt="Attack 6"> <!-- 予備の攻撃画像 -->
+    <img id="img_char_7" src="images/char7.png" alt="Jump 7">
+    <img id="img_char_8" src="images/char8.png" alt="Crouch 8">
+
+    <!-- 敵画像 -->
+    <img id="img_enemy" src="images/boss.png" alt="Boss">
+
+    <!-- コイン画像 (3枚) -->
+    <img id="img_coin_1" src="images/coin1.png" alt="Coin 1">
+    <img id="img_coin_2" src="images/coin2.png" alt="Coin 2">
+    <img id="img_coin_3" src="images/coin3.png" alt="Coin 3">
+
+    <!-- 回復アイテム画像 -->
+    <img id="img_recovery_item" src="https://em-content.zobj.net/thumbs/120/apple/354/monkey_1f412.png" alt="Recovery Item">
+
+    <!-- クリア画面画像 -->
+    <img id="img_victory_bg" src="images/CLASS11.png" alt="Victory Background" class="hidden">
+</div>
+
+<script>
+    // --- 初期設定 ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // ゲームの状態定数
+    const STATE_MENU = 0;
+    const STATE_WEAPON_SELECT = 1;
+    const STATE_GAME = 2;
+    const STATE_GAMEOVER = 3;
+    const STATE_VICTORY = 4;
+
+    let currentState = STATE_MENU;
+
+    // 画像アセットの参照
+    const images = {
+        menuBg: document.getElementById('img_menu_bg'),
+        gameBg: document.getElementById('img_game_bg'),
+        weapons: [
+            { img: document.getElementById('img_weapon_strong'), damage: 20, name: "Strong [Damage: High]" },
+            { img: document.getElementById('img_weapon_normal'), damage: 10, name: "Normal [Damage: Medium]" },
+            { img: document.getElementById('img_weapon_weak'), damage: 5, name: "Weak [Damage: Low]" }
+        ],
+        char: [
+            null, // 0番目は未使用
+            document.getElementById('img_char_1'),
+            document.getElementById('img_char_2'),
+            document.getElementById('img_char_3'), // 停止
+            document.getElementById('img_char_4'),
+            document.getElementById('img_char_5'),
+            document.getElementById('img_char_6'), // 攻撃用素材（仕様では3,5を使用するが予備）
+            document.getElementById('img_char_7'), // ジャンプ
+            document.getElementById('img_char_8')  // しゃがみ
+        ],
+        enemy: document.getElementById('img_enemy'),
+        coins: [
+            document.getElementById('img_coin_1'),
+            document.getElementById('img_coin_2'),
+            document.getElementById('img_coin_3')
+        ],
+        recoveryItem: document.getElementById('img_recovery_item'),
+        victoryBg: document.getElementById('img_victory_bg') // クリア画面画像を追加
+    };
+
+    // ゲーム変数
+    let selectedWeaponIndex = 1; // デフォルト：Normal
+    // キャラクターのサイズを2倍に
+    const playerSizeMultiplier = 2;
+    const playerWidth = 64 * playerSizeMultiplier;
+    const playerHeight = 64 * playerSizeMultiplier;
+    const playerGroundY = 450 - playerHeight - 50; // 真ん中より少し下の地面Y座標
+    let player = {
+        x: 50, y: playerGroundY, width: playerWidth, height: playerHeight,
+        vx: 0, vy: 0, speed: 4,
+        frame: 3, // 現在の画像番号
+        animTimer: 0,
+        walkSequence: [1, 2, 3, 4, 5, 4, 3, 2], // 歩行パターン
+        walkIndex: 2, // sequenceのインデックス
+        facingRight: true,
+        isJumping: false,
+        isCrouching: false,
+        isAttacking: false,
+        attackToggle: false, // 3と5を切り替える用
+        hp: 10,
+        maxHp: 10,
+        attackCooldown: 0, // 攻撃クールダウン
+        maxAttackCooldown: 30 // 1秒間に2回攻撃 (60フレーム/秒なので30フレームで0.5秒)
+    };
+    
+    // ボスのサイズを2倍に
+    const bossSizeMultiplier = 2;
+    const bossWidth = 128 * bossSizeMultiplier;
+    const bossHeight = 128 * bossSizeMultiplier;
+    let boss = {
+        x: canvas.width - bossWidth - 50, // 右端に配置
+        y: playerGroundY - bossHeight + player.height, // プレイヤーのグランドラインに合わせて調整
+        width: bossWidth, height: bossHeight,
+        hp: 100, maxHp: 100,
+        attackTimer: 0,
+        attackInterval: 60 // 1秒に1回攻撃
+    };
+
+    let projectiles = []; // プレイヤーの武器
+    let enemyProjectiles = []; // ボスのコイン
+    let recoveryItems = []; // 回復アイテム
+    let keys = {}; // キー入力状態
+
+    // --- イベントリスナー ---
+    window.addEventListener('keydown', (e) => {
+        keys[e.code] = true;
+        // 攻撃キー（Space）を押した瞬間
+        if(currentState === STATE_GAME && e.code === 'Space') {
+            performAttack();
+        }
+    });
+
+    window.addEventListener('keyup', (e) => {
+        keys[e.code] = false;
+        // 攻撃キーを離したら攻撃状態解除
+        if(e.code === 'Space') {
+            player.isAttacking = false;
+            // 攻撃終わりは待機状態(3)に戻す
+            if(!player.isJumping && !player.isCrouching) player.frame = 3;
+        }
+    });
+
+    canvas.addEventListener('click', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        if (currentState === STATE_MENU) {
+            // ①Start (Button area coordinates are assumed)
+            if (x > 300 && x < 500 && y > 200 && y < 250) {
+                initGame();
+                currentState = STATE_GAME;
+            }
+            // ②Weapon Select
+            if (x > 300 && x < 500 && y > 270 && y < 320) {
+                currentState = STATE_WEAPON_SELECT;
+            }
+        } else if (currentState === STATE_WEAPON_SELECT) {
+            // Weapon selection (Left, Middle, Right)
+            if (y > 150 && y < 350) {
+                if (x > 100 && x < 250) selectedWeaponIndex = 0; // Strong
+                if (x > 325 && x < 475) selectedWeaponIndex = 1; // Normal
+                if (x > 550 && x < 700) selectedWeaponIndex = 2; // Weak
+                // Return to menu after selection
+                currentState = STATE_MENU;
+            }
+        } else if (currentState === STATE_GAMEOVER || currentState === STATE_VICTORY) {
+            currentState = STATE_MENU;
+        }
+    });
+
+    // --- ゲームループ ---
+    function gameLoop() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        switch (currentState) {
+            case STATE_MENU:
+                drawMenu();
+                break;
+            case STATE_WEAPON_SELECT:
+                drawWeaponSelect();
+                break;
+            case STATE_GAME:
+                updateGame();
+                drawGame();
+                break;
+            case STATE_GAMEOVER:
+                drawGameOver();
+                break;
+            case STATE_VICTORY:
+                drawVictory();
+                break;
+        }
+
+        requestAnimationFrame(gameLoop);
+    }
+
+    // --- メニュー描画 ---
+    function drawMenu() {
+        ctx.drawImage(images.menuBg, 0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(300, 200, 200, 50); // Start Button
+        ctx.fillRect(300, 270, 200, 50); // Weapon Select Button
+
+        ctx.fillStyle = 'white';
+        ctx.font = '24px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText("① Start", 400, 235);
+        ctx.fillText("② Weapon Select", 400, 305);
+        
+        // Current weapon display
+        ctx.font = '16px Arial';
+        ctx.fillText("Current Weapon: " + images.weapons[selectedWeaponIndex].name, 400, 400);
+    }
+
+    // --- 武器選択描画 ---
+    function drawWeaponSelect() {
+        ctx.fillStyle = '#222';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = 'white';
+        ctx.font = '30px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText("Select your weapon", 400, 100);
+
+        const positions = [175, 400, 625]; // x-coordinate center
+        
+        images.weapons.forEach((w, index) => {
+            let x = positions[index] - 64; // Weapon image size is 128x128 (64*2)
+            let y = 200;
+            const weaponDrawSize = 128; // 武器の描画サイズも2倍にする
+
+            // Outline
+            if (index === selectedWeaponIndex) {
+                ctx.strokeStyle = 'yellow';
+                ctx.lineWidth = 5;
+                ctx.strokeRect(x - 10, y - 10, weaponDrawSize + 20, weaponDrawSize + 20);
+            }
+            
+            ctx.drawImage(w.img, x, y, weaponDrawSize, weaponDrawSize);
+            
+            ctx.font = '16px Arial';
+            ctx.fillStyle = 'white';
+            ctx.fillText(w.name, positions[index], y + weaponDrawSize + 30);
+        });
+    }
+
+    // --- ゲーム初期化 ---
+    function initGame() {
+        player.x = 100;
+        player.y = playerGroundY; // Ground Y coordinate
+        player.vy = 0;
+        player.hp = player.maxHp;
+        player.frame = 3;
+        boss.hp = 100;
+        projectiles = [];
+        enemyProjectiles = [];
+        recoveryItems = [];
+        player.attackCooldown = 0;
+    }
+
+    // --- 攻撃処理 ---
+    function performAttack() {
+        if (player.attackCooldown > 0) {
+            return; // クールダウン中は攻撃できない
+        }
+
+        player.isAttacking = true;
+        player.attackToggle = !player.attackToggle;
+        player.frame = player.attackToggle ? 5 : 3;
+
+        // 武器発射
+        projectiles.push({
+            x: player.x + (player.facingRight ? player.width - 40 : 20),
+            y: player.y + player.height / 2 - 20,
+            vx: player.facingRight ? 10 : -10,
+            img: images.weapons[selectedWeaponIndex].img,
+            damage: images.weapons[selectedWeaponIndex].damage,
+            width: 64, // 武器のサイズも2倍
+            height: 64
+        });
+        player.attackCooldown = player.maxAttackCooldown; // クールダウンを設定
+    }
+
+    // --- ゲーム更新処理 ---
+    function updateGame() {
+        // クールダウンタイマーの更新
+        if (player.attackCooldown > 0) {
+            player.attackCooldown--;
+        }
+
+        // --- プレイヤー移動 ---
+        let isMoving = false;
+
+        // 状態リセット
+        player.isCrouching = false;
+        
+        // しゃがみ
+        if (keys['ArrowDown']) {
+            player.isCrouching = true;
+            player.frame = 8;
+        } 
+        // ジャンプ
+        else if (keys['ArrowUp'] && !player.isJumping) {
+            player.isJumping = true;
+            player.vy = -18; // ジャンプ力も2倍に
+            player.frame = 7;
+        }
+
+        // 左右移動
+        if (keys['ArrowRight']) {
+            player.x += player.speed;
+            player.facingRight = true;
+            isMoving = true;
+        } else if (keys['ArrowLeft']) {
+            player.x -= player.speed;
+            player.facingRight = false;
+            isMoving = true;
+        }
+
+        // ジャンプ物理演算
+        if (player.isJumping) {
+            player.y += player.vy;
+            player.vy += 0.8; // 重力調整
+            if (player.y >= playerGroundY) {
+                player.y = playerGroundY;
+                player.isJumping = false;
+                player.vy = 0;
+            }
+            player.frame = 7; // ジャンプ中は7
+        } else if (player.isCrouching) {
+            player.frame = 8; // しゃがみ中は8
+        } else if (player.isAttacking) {
+            // 攻撃中は 3 or 5 (performAttackで設定済み)
+        } else if (isMoving) {
+            // 歩行アニメーション
+            player.animTimer++;
+            if (player.animTimer > 5) { // アニメ速度調整
+                player.walkIndex = (player.walkIndex + 1) % player.walkSequence.length;
+                player.animTimer = 0;
+            }
+            player.frame = player.walkSequence[player.walkIndex];
+        } else {
+            // 停止
+            player.frame = 3;
+            // リセット
+            player.walkIndex = 2; // Sequenceの3がある場所へ
+        }
+
+        // --- 画面外制限 ---
+        if (player.x < 0) player.x = 0;
+        if (player.x > canvas.width - player.width) player.x = canvas.width - player.width;
+
+        // --- プレイヤー武器の移動 ---
+        for (let i = 0; i < projectiles.length; i++) {
+            projectiles[i].x += projectiles[i].vx;
+            
+            // ボス当たり判定
+            if (rectIntersect(projectiles[i].x, projectiles[i].y, projectiles[i].width, projectiles[i].height, boss.x, boss.y, boss.width, boss.height)) {
+                boss.hp -= projectiles[i].damage;
+                projectiles.splice(i, 1);
+                i--;
+                if(boss.hp <= 0) currentState = STATE_VICTORY;
+                continue;
+            }
+            // 画面外削除
+            if (projectiles[i].x > canvas.width || projectiles[i].x < -projectiles[i].width) {
+                projectiles.splice(i, 1);
+                i--;
+            }
+        }
+
+        // --- ボス処理 ---
+        boss.attackTimer++;
+        if (boss.attackTimer > boss.attackInterval) { // 約1秒に1回攻撃
+            boss.attackTimer = 0;
+            // 攻撃パターン (0:Top, 1:Middle, 2:Bottom)
+            const pattern = Math.floor(Math.random() * 3);
+            let coinY;
+            let coinVx = -(Math.random() * 4 + 6); // 速度をランダムに (6～10)
+            const coinSize = 64; // コインのサイズも2倍に
+
+            if (pattern === 0) coinY = boss.y + boss.height * 0.2; // Top (Head height)
+            if (pattern === 1) coinY = boss.y + boss.height * 0.5; // Middle (Body height)
+            if (pattern === 2) coinY = boss.y + boss.height * 0.8; // Bottom (Feet height)
+            
+            // ボス攻撃：コイン生成
+            enemyProjectiles.push({
+                x: boss.x,
+                y: coinY,
+                vx: coinVx,
+                type: pattern, // 回避判定用
+                animIndex: 0,
+                animTimer: 0,
+                width: coinSize,
+                height: coinSize
+            });
+        }
+
+        // --- コイン移動・アニメーション・当たり判定 ---
+        for (let i = 0; i < enemyProjectiles.length; i++) {
+            let p = enemyProjectiles[i];
+            p.x += p.vx;
+            
+            // コイン回転アニメ
+            p.animTimer++;
+            if(p.animTimer > 5) {
+                p.animIndex = (p.animIndex + 1) % 3;
+                p.animTimer = 0;
+            }
+
+            // プレイヤー当たり判定
+            // プレイヤーのHitbox調整 (サイズ2倍に合わせて調整)
+            let pRect = { x: player.x + player.width * 0.2, y: player.y + player.height * 0.1, w: player.width * 0.6, h: player.height * 0.8 }; // デフォルト
+            
+            if (player.isJumping) {
+                // ジャンプ中はY座標が上がっている
+                pRect.y = player.y + player.height * 0.1;
+                pRect.h = player.height * 0.8;
+            }
+            if (player.isCrouching) {
+                // しゃがみ中は高さが半分になり、下が有効
+                pRect.y = player.y + player.height * 0.5;
+                pRect.h = player.height * 0.4;
+            }
+
+            // 攻撃タイプごとの回避判定ロジック
+            // Middle(1)は ジャンプ(7) または しゃがみ(8) で回避可能
+            // Bottom(2)は ジャンプ(7) で回避可能
+            let canHit = true;
+            if (p.type === 1) { // Middle
+                if (player.isJumping || player.isCrouching) {
+                    canHit = false;
+                }
+            } else if (p.type === 2) { // Bottom
+                if (player.isJumping) {
+                    canHit = false;
+                }
+            }
+
+            if (canHit && rectIntersect(p.x, p.y, p.width, p.height, pRect.x, pRect.y, pRect.w, pRect.h)) {
+                player.hp--;
+                enemyProjectiles.splice(i, 1);
+                i--;
+                if(player.hp <= 0) currentState = STATE_GAMEOVER;
+                continue;
+            }
+
+            if (p.x < -p.width) {
+                enemyProjectiles.splice(i, 1);
+                i--;
+            }
+        }
+
+        // --- 回復アイテムの生成 ---
+        if (Math.random() < 0.005) { // 0.5% の確率で生成
+            recoveryItems.push({
+                x: Math.random() * (canvas.width - 64),
+                y: -64, // 画面外上部から
+                vy: Math.random() * 2 + 1, // 速度をランダムに
+                width: 64, height: 64
+            });
+        }
+
+        // --- 回復アイテムの移動と当たり判定 ---
+        for (let i = 0; i < recoveryItems.length; i++) {
+            let item = recoveryItems[i];
+            item.y += item.vy;
+
+            // プレイヤーとの当たり判定
+            if (rectIntersect(item.x, item.y, item.width, item.height, player.x, player.y, player.width, player.height)) {
+                player.hp = Math.min(player.maxHp, player.hp + 1); // HPを1回復 (最大HPまで)
+                recoveryItems.splice(i, 1);
+                i--;
+                continue;
+            }
+
+            // 画面外削除
+            if (item.y > canvas.height) {
+                recoveryItems.splice(i, 1);
+                i--;
+            }
+        }
+    }
+
+    // --- ゲーム描画 ---
+    function drawGame() {
+        // 背景
+        ctx.drawImage(images.gameBg, 0, 0, canvas.width, canvas.height);
+
+        // ボス描画
+        ctx.drawImage(images.enemy, boss.x, boss.y, boss.width, boss.height);
+        // ボスHPバー
+        ctx.fillStyle = 'red';
+        ctx.fillRect(boss.x, boss.y - 20, boss.width, 10);
+        ctx.fillStyle = 'green';
+        ctx.fillRect(boss.x, boss.y - 20, boss.width * (boss.hp / boss.maxHp), 10);
+
+        // プレイヤー描画
+        let img = images.char[player.frame];
+        ctx.save();
+        if (!player.facingRight) {
+            // 左右反転
+            ctx.translate(player.x + player.width, player.y);
+            ctx.scale(-1, 1);
+            ctx.drawImage(img, 0, 0, player.width, player.height);
+        } else {
+            ctx.drawImage(img, player.x, player.y, player.width, player.height);
+        }
+        ctx.restore();
+
+        // プレイヤーHPバー
+        ctx.fillStyle = 'red';
+        ctx.fillRect(50, 50, 100, 10); // バーの幅を固定
+        ctx.fillStyle = 'green';
+        ctx.fillRect(50, 50, 100 * (player.hp / player.maxHp), 10);
+
+        // プレイヤー武器（弾）描画
+        projectiles.forEach(p => {
+            ctx.drawImage(p.img, p.x, p.y, p.width, p.height);
+        });
+
+        // 敵コイン描画
+        enemyProjectiles.forEach(p => {
+            let coinImg = images.coins[p.animIndex];
+            ctx.drawImage(coinImg, p.x, p.y, p.width, p.height);
+        });
+
+        // 回復アイテム描画
+        recoveryItems.forEach(item => {
+            ctx.drawImage(images.recoveryItem, item.x, item.y, item.width, item.height);
+        });
+    }
+
+    function drawGameOver() {
+        ctx.fillStyle = 'rgba(0,0,0,0.8)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = 'red';
+        ctx.font = '50px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText("GAME OVER", 400, 225);
+        ctx.font = '20px Arial';
+        ctx.fillStyle = 'white';
+        ctx.fillText("Click to Menu", 400, 300);
+    }
+
+    function drawVictory() {
+        // クリア画面の背景画像を描画
+        if (images.victoryBg.complete && images.victoryBg.naturalWidth > 0) {
+            ctx.drawImage(images.victoryBg, 0, 0, canvas.width, canvas.height);
+        } else {
+            // 画像が読み込めない場合のフォールバック
+            ctx.fillStyle = 'rgba(0,0,0,0.8)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        
+        ctx.fillStyle = 'gold';
+        ctx.font = '50px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText("VICTORY!", 400, 225);
+        ctx.font = '20px Arial';
+        ctx.fillStyle = 'white';
+        ctx.fillText("Click to Menu", 400, 300);
+    }
+
+    // 短形当たり判定関数
+    function rectIntersect(x1, y1, w1, h1, x2, y2, w2, h2) {
+        return x2 < x1 + w1 && x2 + w2 > x1 && y2 < y1 + h1 && y2 + h2 > y1;
+    }
+
+    // 初回起動
+    gameLoop();
+
+</script>
+</body>
+</html>
